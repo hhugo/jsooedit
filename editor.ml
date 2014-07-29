@@ -1,6 +1,9 @@
 
 let (>>=) = Lwt.bind
 
+let px s = Js.string (string_of_int s ^ "px")
+let em s = Js.string (string_of_int s ^ "em")
+let percent s = Js.string (string_of_int s ^ "%")
 let key_of_code = function
   | 3 -> `Enter
   | 8 -> `Backspace
@@ -39,55 +42,71 @@ let key_of_code = function
 
 (* Render the editor *)
 module View = struct
+
+  class type input = object
+  inherit Dom_html.element
+  method focus : unit Js.meth
+  method blur : unit Js.meth
+  end
   type 'a t = {
     view : 'a Zed_view.t;
     dom_cursor : Dom_html.element Js.t;
     mutable blink_cursor : unit Lwt.t;
     container : Dom_html.element Js.t;
+    container_txt : Dom_html.element Js.t;
+    mutable input : input Js.t;
     name : string;
   }
 
   let create c id =
     let view = Zed_view.create c 10 83 in
-    let container = Dom_html.getElementById id in
+    let container = Dom_html.(createDiv document) in
+    let container_txt = Dom_html.(createDiv document) in
+    Dom.appendChild container container_txt;
+    container##style##position <- Js.string "relative";
+    Dom.appendChild (Dom_html.getElementById id) container;
+    (* container_txt##style##height  <- px (11  * 16); *)
+    (* container_txt##style##overflow <- Js.string "auto"; *)
     let dom_cursor = Dom_html.(createSpan document) in
     dom_cursor##classList##add(Js.string "cursor");
+    dom_cursor##style##position <- Js.string "absolute";
     dom_cursor##innerHTML <- Js.string "\xC2\xA0";
     {
       view;
       container;
+      container_txt;
       dom_cursor;
       blink_cursor = Lwt.return_unit;
       name = id;
+      input = (Dom_html.(createInput document) :> input Js.t)
     }
 
   let display' t =
     (* Format.eprintf "display %s@." t.name; *)
     let start,lines = Zed_view.get_lines t.view in
-    let content = t.container in
+    (* let all_lines = Zed_edit.lines (Zed_view.edit t.view) in *)
+    (* let count = Zed_lines.count all_lines in *)
+    let content = t.container_txt in
     let cursor = Zed_view.cursor t.view in
     let cur = Zed_cursor.get_line cursor in
     content##innerHTML <- Js.string "";
+    (* let s_div = Dom_html.(createDiv document) in *)
+    (* s_div##style##height <- px (start * 18); *)
+    (* let e_div = Dom_html.(createDiv document) in *)
+    (* let emiss = count - (List.length lines) - start in *)
+    (* e_div##style##height <- px (emiss * 18); *)
+    (* Dom.appendChild content s_div; *)
     let start = ref start in
     List.iter (fun r ->
         let div = Dom_html.(createDiv document) in
         div##classList##add(Js.string "line");
+        div##style##width <- percent 100;
         if !start = cur
         then div##classList##add(Js.string "current");
         let span = Dom_html.(createSpan document) in
         span##innerHTML <- Js.string (string_of_int !start);
         Dom.appendChild div span;
         (match r with
-         | Some r when !start = cur ->
-           let d1 = Dom_html.(createPre document) in
-           let d2 = Dom_html.(createPre document) in
-           let col = Zed_cursor.get_column cursor in
-           let r1,r2 = Zed_rope.break r col in
-           d1##innerHTML <- Js.string (Zed_rope.to_string r1);
-           d2##innerHTML <- Js.string (Zed_rope.to_string r2);
-           Dom.appendChild div d1;
-           Dom.appendChild div t.dom_cursor;
-           Dom.appendChild div d2;
          | Some r ->
            let d = Dom_html.(createPre document) in
            d##innerHTML <- Js.string (Zed_rope.to_string r);
@@ -98,8 +117,9 @@ module View = struct
            Dom.appendChild div d);
         incr start;
         Dom.appendChild content div
-      ) lines
-
+      ) lines;
+      (* Dom.appendChild content e_div *)
+    ()
   let display t =
     Dom_html._requestAnimationFrame (Js.wrap_callback (fun _ -> display' t))
 
@@ -112,16 +132,51 @@ module View = struct
 
   let focus v =
     Lwt.cancel v.blink_cursor;
+    v.input##focus();
     v.blink_cursor <- show_cursor v ()
 
   let blur v =
     Lwt.cancel v.blink_cursor;
+    v.input##blur();
     v.dom_cursor##style##visibility <- Js.string "hidden"
 
+  let cursor_position v cb =
+    let cursor = Zed_view.cursor v.view in
+    let _ = React.S.map (fun (line, col) ->
+        cb (line * 18) ((1 + col) * 8)
+      ) (Zed_view.cursor_position v.view)
+    in
+    ()
+
+  let set_input t dom =
+    let div = Dom_html.(createDiv document) in
+    Dom.appendChild div t.dom_cursor;
+    cursor_position t (fun top left ->
+        div##style##top <- px top;
+        div##style##left <- px left;
+
+        t.dom_cursor##style##top <- px top;
+        t.dom_cursor##style##left <- px left
+      );
+    dom##onblur <- Dom_html.handler (fun _ -> blur t; Js._false);
+    div##style##position <- Js.string "absolute";
+    div##style##height <- px 0;
+    div##style##width <- px 3;
+    div##style##overflow <- Js.string "hidden";
+    Dom.appendChild div dom;
+    Dom.appendChild t.container div;
+    Dom.appendChild t.container t.dom_cursor;
+    t.input <- (dom :> input Js.t)
+
   let init view =
-    (* let undo = Dom_html.getElementById("undo") in *)
-    (* undo##onclick <- Dom_html.handler (fun _ -> Zed_edit.undo (Zed_view.context view.view); Js._true); *)
+    Lwt.ignore_result (
+      Lwt_js_events.blurs
+        Dom_html.window
+        (fun _ _ ->
+           blur view;
+           Lwt.return_unit));
     blur view;
+    view.container##onmousedown <- Dom_html.handler (fun e -> focus view; Js._false);
     let _ = React.E.map (fun _ -> display view) (Zed_view.changes view.view)
     in display view;
     ()
@@ -138,7 +193,17 @@ module Input = struct
   }
 
   let create context view id =
-    let i = Js.Unsafe.coerce (Dom_html.getElementById id) in
+    let i = Dom_html.(createTextarea document) in
+    let i' = Js.Unsafe.coerce i in
+    i'##autocorrect <- Js.string "off";
+    i'##autocapitalize <- Js.string "off";
+    i'##spellcheck <- Js.string "false";
+    i##style##position <- Js.string "absolute";
+    i##style##padding <- px 0;
+    i##style##width <- px 1000;
+    i##style##height < em 1;
+    i##style##outline <- Js.string "none";
+    i'##tabindex <- Js.string "0";
     {input=i;context;prev=Js.string "";view}
 
   let reset i =
@@ -206,9 +271,7 @@ module Input = struct
           Js._false
         with Other_key -> Js._true
       );
-    i##onfocus <- Dom_html.handler(fun e -> View.focus input.view; Js._true);
-    i##onblur <- Dom_html.handler(fun e -> View.blur input.view; Js._true);
-    i##focus();
+    View.set_input input.view i;
     Lwt.ignore_result (listen_loop ~first:true input);
 end
 
