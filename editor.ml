@@ -37,7 +37,7 @@ let key_of_code = function
   | 63302 -> `Insert
   | n -> `Other n
 
-
+(* Render the editor *)
 module View = struct
   type 'a t = {
     view : 'a Zed_view.t;
@@ -127,7 +127,7 @@ module View = struct
     ()
 end
 
-
+(* Basic input, doesn't handle selection *)
 module Input = struct
 
   type 'a t = {
@@ -186,21 +186,25 @@ module Input = struct
         end in
     loop' first ()
 
+
+  exception Other_key
   let init input =
     let i = input.input in
     let context = input.context in
-    i##onkeydown <- Dom_html.handler (fun e -> begin
+    i##onkeydown <- Dom_html.handler (fun e ->
+        try begin
           match key_of_code e##keyCode with
           | `Backspace -> reset input; Zed_edit.delete_prev_char context
-          | `Delete -> Zed_edit.delete_next_char context
+          | `Delete -> reset input; Zed_edit.delete_next_char context
           | `Enter -> reset input; Zed_edit.insert context (Zed_rope.of_string "\n")
           | `Left -> reset input; Zed_edit.prev_char context
           | `Right -> reset input; Zed_edit.next_char context
           | `Up -> reset input; Zed_edit.prev_line context
           | `Down -> reset input; Zed_edit.next_line context
-          | _ -> ()
+          | _ -> raise Other_key
         end;
-        Js._true
+          Js._false
+        with Other_key -> Js._true
       );
     i##onfocus <- Dom_html.handler(fun e -> View.focus input.view; Js._true);
     i##onblur <- Dom_html.handler(fun e -> View.blur input.view; Js._true);
@@ -208,7 +212,7 @@ module Input = struct
     Lwt.ignore_result (listen_loop ~first:true input);
 end
 
-let js_rope f r =
+let rope_iter_js f r =
   let s = Zed_rope.to_string r in
   let j = Js.string s in
   let j' = f j in
@@ -223,43 +227,43 @@ type 'a data =
   } deriving (Json)
 
 type action =
-  | Update of (int * int * string)
-  | Insert of (int * string)
-  | Remove of (int * int)
-  | Move of int deriving (Json)
+  | Update of (int * int * string)  deriving (Json)
+  (* | Insert of (int * string) *)
+  (* | Remove of (int * int) *)
+  (* | Move of int *)
 type msg = action data deriving (Json)
 
-let str_size x = (Js.string x)##length
-let merge a b = match a,b with
-  | Insert (i,str),Insert (j,str2) when i + str_size str = j -> Some (Insert (i, str ^ str2 ))
-  (* | Remove (p,n),Remove(p',n') when p - n = p' -> Some (Remove (p, n + n' - 1)) *)
-  | _ -> None
+(* let str_size x = (Js.string x)##length *)
+(* let merge a b = match a,b with *)
+(*   | Insert (i,str),Insert (j,str2) when i + str_size str = j -> Some (Insert (i, str ^ str2 )) *)
+(*   (\* | Remove (p,n),Remove(p',n') when p - n = p' -> Some (Remove (p, n + n' - 1)) *\) *)
+(*   | _ -> None *)
 let cache owner e =
-  let e',send' = React.E.create () in
-  let pred = ref None in
-  let _ = React.E.map (fun x ->
-      match !pred with
-      | None -> pred:=Some x
-      | Some x' -> match merge x' x with
-        | None -> send' x'; pred := Some x
-        | Some m -> pred := Some m
-    ) e in
+  (* let e',send' = React.E.create () in *)
+  (* let pred = ref None in *)
+  (* let _ = React.E.map (fun x -> *)
+  (*     match !pred with *)
+  (*     | None -> pred:=Some x *)
+  (*     | Some x' -> match merge x' x with *)
+  (*       | None -> send' x'; pred := Some x *)
+  (*       | Some m -> pred := Some m *)
+  (*   ) e in *)
   let e'' = React.E.map (fun data -> {data;owner}) e in
   e''
 
 
 let _ = Dom_html.window##onload <- Dom_html.handler (fun _ ->
     let editor : unit Zed_edit.t = Zed_edit.create
-        ~lowercase:(js_rope (fun s -> s##toLowerCase()))
-        ~uppercase:(js_rope (fun s -> s##toUpperCase())) () in
+        ~lowercase:(rope_iter_js (fun s -> s##toLowerCase()))
+        ~uppercase:(rope_iter_js (fun s -> s##toUpperCase())) () in
     let cursor = Zed_edit.new_cursor editor in
     let context = Zed_edit.context editor cursor in
     let view = View.create context "content" in
     let input = Input.create context view "input" in
 
     let copy_editor = Zed_edit.create
-        ~lowercase:(js_rope (fun s -> s##toLowerCase()))
-        ~uppercase:(js_rope (fun s -> s##toUpperCase())) () in
+        ~lowercase:(rope_iter_js (fun s -> s##toLowerCase()))
+        ~uppercase:(rope_iter_js (fun s -> s##toUpperCase())) () in
     let copy_cursor = Zed_edit.new_cursor copy_editor in
     let copy_context = Zed_edit.context copy_editor copy_cursor in
     let copy_view = View.create copy_context "copy_content" in
@@ -267,31 +271,35 @@ let _ = Dom_html.window##onload <- Dom_html.handler (fun _ ->
 
     let raw,send_raw = React.E.create () in
 
+    (* apply a patch on context *)
     let patch ctx (a,b,c) =
       Lwt.async (fun _ ->
           Lwt_js.sleep 0.1 >>= fun () ->
           Zed_edit.patch ctx a b (Zed_rope.of_string c);
           Lwt.return_unit) in
 
-    let send ctx owner =
+    (* sync ctx *)
+    let sync ctx owner =
       let ed = Zed_edit.edit ctx in
-      let cursor = Zed_edit.cursor ctx in
-      let cpos = Zed_cursor.position cursor in
-      let _ = React.S.map (fun i ->
-          let data = Move i in
-          let msg = {owner;data} in
-          let str = Json_msg.to_string msg in
-          send_raw str
-        ) cpos in
-      let to_send = React.E.fmap (fun (pos,a,r,bb) ->
-          if not bb then
+      (* let cursor = Zed_edit.cursor ctx in *)
+      (* let cpos = Zed_cursor.position cursor in *)
+      (* let _ = React.S.map (fun i -> *)
+      (*     let data = Move i in *)
+      (*     let msg = {owner;data} in *)
+      (*     let str = Json_msg.to_string msg in *)
+      (*     send_raw str *)
+      (*   ) cpos in *)
+
+      (* send changes, but previously apply patches *)
+      let to_send = React.E.fmap (fun (pos,a,r,this_comes_from_a_patch) ->
+          if not this_comes_from_a_patch then
             let text = Zed_edit.text ed in
             let added = Zed_rope.sub text pos a in
             let str = Zed_rope.to_string added in
             let data = match r,str with
               | 0,"" -> assert false
-              | 0,_  -> Insert (pos,str)
-              | len,"" -> Remove (pos,len)
+              (* | 0,_  -> Insert (pos,str) *)
+              (* | len,"" -> Remove (pos,len) *)
               | _    -> Update (pos,r,str) in
             Some data
           else None
@@ -300,18 +308,20 @@ let _ = Dom_html.window##onload <- Dom_html.handler (fun _ ->
           let str = Json_msg.to_string msg in
           send_raw str
         ) (cache owner to_send) in
+
+      (* listen for msg and patch context *)
       let _ = React.E.map (fun s ->
           let m = Json_msg.from_string s in
           if m.owner <> owner
           then match m.data with
             | Update updt -> patch ctx updt
-            | Insert (pos,string) -> patch ctx (pos,0,string)
-            | Remove (pos,len)    -> patch ctx (pos,len,"")
-            | Move _ -> ()
+            (* | Insert (pos,string) -> patch ctx (pos,0,string) *)
+            (* | Remove (pos,len)    -> patch ctx (pos,len,"") *)
+            (* | Move _ -> () *)
         ) raw in
       () in
-    send context 1;
-    send copy_context 2;
+    sync context 1;
+    sync copy_context 2;
     let _ = React.E.map (print_endline) raw in
     View.init copy_view;
     View.init view;
