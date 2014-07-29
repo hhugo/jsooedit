@@ -56,6 +56,7 @@ module View = struct
     container_txt : Dom_html.element Js.t;
     mutable input : input Js.t;
     name : string;
+    mutable col_size : int;
   }
 
   let create c id =
@@ -78,8 +79,13 @@ module View = struct
       dom_cursor;
       blink_cursor = Lwt.return_unit;
       name = id;
-      input = (Dom_html.(createInput document) :> input Js.t)
+      input = (Dom_html.(createInput document) :> input Js.t);
+      col_size = 0;
     }
+
+  let size_of_line () = 18
+  let size_of_col () = 8
+
 
   let display' t =
     (* Format.eprintf "display %s@." t.name; *)
@@ -97,6 +103,12 @@ module View = struct
     (* e_div##style##height <- px (emiss * 18); *)
     (* Dom.appendChild content s_div; *)
     let start = ref start in
+    let numsize =
+      let rec loop r acc =
+        if acc < 10 then r + 1 else loop (succ r) (acc/10)
+      in loop 1 (!start + List.length lines) in
+
+    t.col_size <- numsize;
     List.iter (fun r ->
         let div = Dom_html.(createDiv document) in
         div##classList##add(Js.string "line");
@@ -104,7 +116,8 @@ module View = struct
         if !start = cur
         then div##classList##add(Js.string "current");
         let span = Dom_html.(createSpan document) in
-        span##innerHTML <- Js.string (string_of_int !start);
+        span##innerHTML <- Js.string (string_of_int (1 + !start));
+        span##style##width <- px (size_of_col () * t.col_size);
         Dom.appendChild div span;
         (match r with
          | Some r ->
@@ -132,6 +145,21 @@ module View = struct
 
   let round x = int_of_float (x +. 0.5)
 
+  let pos_of_xy v x y =
+    let x = x -. float_of_int v.col_size in
+    let lines = Zed_edit.lines (Zed_view.edit v.view) in
+    let line = int_of_float (y /. (float_of_int (size_of_line ())) ) + Zed_view.line_start v.view in
+    let col =  round (x /. (float_of_int (size_of_line ()))) in
+    try
+      let pos = Zed_lines.line_start lines line in
+      let en = Zed_lines.line_stop lines line in
+      let delta = en - pos in
+      let col = if col > delta then delta else col in
+      pos + col
+    with
+      Zed_lines.Out_of_bounds -> Zed_lines.length lines
+
+
   let focus ?e v =
     begin
       match e with
@@ -141,18 +169,8 @@ module View = struct
         let rect = v.container_txt##getBoundingClientRect() in
         let x = float_of_int e##clientX -. rect##left in
         let y = float_of_int e##clientY -. rect##top in
+        let pos = pos_of_xy v x y in
         Format.eprintf "x:%f ; y:%f@." x y;
-        let lines = Zed_edit.lines (Zed_view.edit v.view) in
-        let line = int_of_float (y /. 18.) + Zed_view.line_start v.view in
-        let col =  round (x /. 8. -. 1.) in
-        let pos = try
-            let pos = Zed_lines.line_start lines line in
-            let en = Zed_lines.line_stop lines line in
-            let delta = en - pos in
-            let col = if col > delta then delta else col in
-            pos + col
-          with
-            Zed_lines.Out_of_bounds -> Zed_lines.length lines in
         Format.eprintf "goto pos %d@." pos;
         (try Zed_edit.goto (Zed_view.context v.view) pos with _ -> ());
         Js.Unsafe.global##debugEvent <- e;
@@ -171,7 +189,7 @@ module View = struct
   let cursor_position v cb =
     let cursor = Zed_view.cursor v.view in
     let _ = React.S.map (fun (line, col) ->
-        cb (line * 18) ((1 + col) * 8)
+        cb (line * size_of_line ()) (col * (size_of_col ())  + (v.col_size * (size_of_col ())))
       ) (Zed_view.cursor_position v.view)
     in
     ()
