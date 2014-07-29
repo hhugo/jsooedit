@@ -130,7 +130,35 @@ module View = struct
     view.dom_cursor##style##visibility <- Js.string "hidden";
     Lwt_js.sleep 0.530 >>= show_cursor view
 
-  let focus v =
+  let round x = int_of_float (x +. 0.5)
+
+  let focus ?e v =
+    begin
+      match e with
+      | None -> ()
+      | Some e ->
+        let t = Dom_html.eventTarget e in
+        let rect = v.container_txt##getBoundingClientRect() in
+        let x = float_of_int e##clientX -. rect##left in
+        let y = float_of_int e##clientY -. rect##top in
+        Format.eprintf "x:%f ; y:%f@." x y;
+        let lines = Zed_edit.lines (Zed_view.edit v.view) in
+        let line = int_of_float (y /. 18.) + Zed_view.line_start v.view in
+        let col =  round (x /. 8. -. 1.) in
+        let pos = try
+            let pos = Zed_lines.line_start lines line in
+            let en = Zed_lines.line_stop lines line in
+            let delta = en - pos in
+            let col = if col > delta then delta else col in
+            pos + col
+          with
+            Zed_lines.Out_of_bounds -> Zed_lines.length lines in
+        Format.eprintf "goto pos %d@." pos;
+        (try Zed_edit.goto (Zed_view.context v.view) pos with _ -> ());
+        Js.Unsafe.global##debugEvent <- e;
+        Js.Unsafe.global##debugTarget <- x;
+        print_endline (Js.to_string (Obj.magic  (t##textContent)))
+    end;
     Lwt.cancel v.blink_cursor;
     v.input##focus();
     v.blink_cursor <- show_cursor v ()
@@ -176,7 +204,7 @@ module View = struct
            blur view;
            Lwt.return_unit));
     blur view;
-    view.container##onmousedown <- Dom_html.handler (fun e -> focus view; Js._false);
+    view.container##onmousedown <- Dom_html.handler (fun e -> focus ~e view; Js._false);
     let _ = React.E.map (fun _ -> display view) (Zed_view.changes view.view)
     in display view;
     ()
