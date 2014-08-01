@@ -55,17 +55,16 @@ module View = struct
     container : Dom_html.element Js.t;
     container_txt : Dom_html.element Js.t;
     mutable input : input Js.t;
-    name : string;
     mutable col_size : int;
   }
 
-  let create c id =
+  let create c parent =
     let view = Zed_view.create c 10 83 in
     let container = Dom_html.(createDiv document) in
     let container_txt = Dom_html.(createDiv document) in
     Dom.appendChild container container_txt;
     container##style##position <- Js.string "relative";
-    Dom.appendChild (Dom_html.getElementById id) container;
+    Dom.appendChild parent container;
     (* container_txt##style##height  <- px (11  * 16); *)
     (* container_txt##style##overflow <- Js.string "auto"; *)
     let dom_cursor = Dom_html.(createSpan document) in
@@ -78,7 +77,6 @@ module View = struct
       container_txt;
       dom_cursor;
       blink_cursor = Lwt.return_unit;
-      name = id;
       input = (Dom_html.(createInput document) :> input Js.t);
       col_size = 0;
     }
@@ -146,10 +144,9 @@ module View = struct
   let round x = int_of_float (x +. 0.5)
 
   let pos_of_xy v x y =
-    let x = x -. float_of_int v.col_size in
     let lines = Zed_edit.lines (Zed_view.edit v.view) in
     let line = int_of_float (y /. (float_of_int (size_of_line ())) ) + Zed_view.line_start v.view in
-    let col =  round (x /. (float_of_int (size_of_line ()))) in
+    let col =  round (x /. (float_of_int (size_of_col ()))) - v.col_size in
     try
       let pos = Zed_lines.line_start lines line in
       let en = Zed_lines.line_stop lines line in
@@ -187,7 +184,6 @@ module View = struct
     v.dom_cursor##style##visibility <- Js.string "hidden"
 
   let cursor_position v cb =
-    let cursor = Zed_view.cursor v.view in
     let _ = React.S.map (fun (line, col) ->
         cb (line * size_of_line ()) (col * (size_of_col ())  + (v.col_size * (size_of_col ())))
       ) (Zed_view.cursor_position v.view)
@@ -238,7 +234,7 @@ module Input = struct
     view : 'a View.t;
   }
 
-  let create context view id =
+  let create context view =
     let i = Dom_html.(createTextarea document) in
     let i' = Js.Unsafe.coerce i in
     i'##autocorrect <- Js.string "off";
@@ -247,7 +243,7 @@ module Input = struct
     i##style##position <- Js.string "absolute";
     i##style##padding <- px 0;
     i##style##width <- px 1000;
-    i##style##height < em 1;
+    i##style##height <- em 1;
     i##style##outline <- Js.string "none";
     i'##tabindex <- Js.string "0";
     {input=i;context;prev=Js.string "";view}
@@ -367,16 +363,20 @@ let _ = Dom_html.window##onload <- Dom_html.handler (fun _ ->
         ~uppercase:(rope_iter_js (fun s -> s##toUpperCase())) () in
     let cursor = Zed_edit.new_cursor editor in
     let context = Zed_edit.context editor cursor in
-    let view = View.create context "content" in
-    let input = Input.create context view "input" in
+    let content = Dom_html.getElementById "content" in
+    let text = Js.Opt.case (content##textContent) (fun () -> "" ) Js.to_string in
+    content##innerHTML <- Js.string "";
+    let view = View.create context content in
+    let input = Input.create context view in
 
     let copy_editor = Zed_edit.create
         ~lowercase:(rope_iter_js (fun s -> s##toLowerCase()))
         ~uppercase:(rope_iter_js (fun s -> s##toUpperCase())) () in
     let copy_cursor = Zed_edit.new_cursor copy_editor in
     let copy_context = Zed_edit.context copy_editor copy_cursor in
-    let copy_view = View.create copy_context "copy_content" in
-    let copy_input = Input.create copy_context copy_view "copy_input" in
+    let copy_content = Dom_html.getElementById "copy_content" in
+    let copy_view = View.create copy_context copy_content in
+    let copy_input = Input.create copy_context copy_view in
 
     let raw,send_raw = React.E.create () in
 
@@ -431,6 +431,7 @@ let _ = Dom_html.window##onload <- Dom_html.handler (fun _ ->
       () in
     sync context 1;
     sync copy_context 2;
+    Zed_edit.insert context (Zed_rope.of_string text);
     let _ = React.E.map (print_endline) raw in
     View.init copy_view;
     View.init view;
