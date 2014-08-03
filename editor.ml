@@ -129,7 +129,11 @@ module View = struct
         incr start;
         Dom.appendChild content div
       ) lines;
-      (* Dom.appendChild content e_div *)
+    (* Dom.appendChild content e_div *)
+    let curpos = Dom_html.(createDiv document) in
+    curpos##innerHTML <- Js.string (Printf.sprintf "%d-%d" (Zed_cursor.get_line cursor + 1) (Zed_cursor.get_column cursor));
+    Dom.appendChild content curpos;
+
     ()
   let display t =
     Dom_html._requestAnimationFrame (Js.wrap_callback (fun _ -> display' t))
@@ -400,8 +404,8 @@ let _ = Dom_html.window##onload <- Dom_html.handler (fun _ ->
       (*   ) cpos in *)
 
       (* send changes, but previously apply patches *)
-      let to_send = React.E.fmap (fun (pos,a,r,this_comes_from_a_patch) ->
-          if not this_comes_from_a_patch then
+      let to_send = React.E.fmap (fun (pos,a,r,source) ->
+          if source <> Zed_edit.S_External then
             let text = Zed_edit.text ed in
             let added = Zed_rope.sub text pos a in
             let str = Zed_rope.to_string added in
