@@ -51,6 +51,8 @@ module View = struct
   type 'a t = {
     view : 'a Zed_view.t;
     dom_cursor : Dom_html.element Js.t;
+    cursor_xy : (int * int) React.event;
+    set_cursor_xy : (int * int) -> unit;
     mutable blink_cursor : unit Lwt.t;
     container : Dom_html.element Js.t;
     container_txt : Dom_html.element Js.t;
@@ -71,7 +73,10 @@ module View = struct
     dom_cursor##classList##add(Js.string "cursor");
     dom_cursor##style##position <- Js.string "absolute";
     dom_cursor##innerHTML <- Js.string "\xC2\xA0";
+    let cursor_xy,set_cursor_xy = React.E.create () in
     {
+      cursor_xy;
+      set_cursor_xy;
       view;
       container;
       container_txt;
@@ -83,6 +88,26 @@ module View = struct
 
   let size_of_line () = 18
   let size_of_col () = 8
+
+  let xy_of_pos v line col =
+    let line = line - Zed_view.line_start v.view in
+    (line * size_of_line ()), (col * (size_of_col ())  + (v.col_size * (size_of_col ())))
+
+  let round x = int_of_float (x +. 0.5)
+
+  let pos_of_xy v x y =
+    let lines = Zed_edit.lines (Zed_view.edit v.view) in
+    let line = int_of_float (y /. (float_of_int (size_of_line ())) ) + Zed_view.line_start v.view in
+    let col =  round (x /. (float_of_int (size_of_col ()))) - v.col_size in
+    try
+      let pos = Zed_lines.line_start lines line in
+      let en = Zed_lines.line_stop lines line in
+      let delta = en - pos in
+      let col = if col > delta then delta else col in
+      pos + col
+    with
+      Zed_lines.Out_of_bounds -> Zed_lines.length lines
+
 
 
   let display' t =
@@ -131,6 +156,7 @@ module View = struct
       ) lines;
     (* Dom.appendChild content e_div *)
     let curpos = Dom_html.(createDiv document) in
+    t.set_cursor_xy (xy_of_pos t (Zed_cursor.get_line cursor) (Zed_cursor.get_column cursor));
     curpos##innerHTML <- Js.string (Printf.sprintf "%d-%d" (Zed_cursor.get_line cursor + 1) (Zed_cursor.get_column cursor));
     Dom.appendChild content curpos;
 
@@ -144,22 +170,6 @@ module View = struct
   and hide_cursor view () =
     view.dom_cursor##style##visibility <- Js.string "hidden";
     Lwt_js.sleep 0.530 >>= show_cursor view
-
-  let round x = int_of_float (x +. 0.5)
-
-  let pos_of_xy v x y =
-    let lines = Zed_edit.lines (Zed_view.edit v.view) in
-    let line = int_of_float (y /. (float_of_int (size_of_line ())) ) + Zed_view.line_start v.view in
-    let col =  round (x /. (float_of_int (size_of_col ()))) - v.col_size in
-    try
-      let pos = Zed_lines.line_start lines line in
-      let en = Zed_lines.line_stop lines line in
-      let delta = en - pos in
-      let col = if col > delta then delta else col in
-      pos + col
-    with
-      Zed_lines.Out_of_bounds -> Zed_lines.length lines
-
 
   let focus ?e v =
     begin
@@ -187,23 +197,15 @@ module View = struct
     v.input##blur();
     v.dom_cursor##style##visibility <- Js.string "hidden"
 
-  let cursor_position v cb =
-    let _ = React.S.map (fun (line, col) ->
-        cb (line * size_of_line ()) (col * (size_of_col ())  + (v.col_size * (size_of_col ())))
-      ) (Zed_view.cursor_position v.view)
-    in
-    ()
-
   let set_input t dom =
     let div = Dom_html.(createDiv document) in
     Dom.appendChild div t.dom_cursor;
-    cursor_position t (fun top left ->
+    let _ = React.E.map (fun (top, left) ->
         div##style##top <- px top;
         div##style##left <- px left;
-
         t.dom_cursor##style##top <- px top;
         t.dom_cursor##style##left <- px left
-      );
+      ) t.cursor_xy in
     dom##onblur <- Dom_html.handler (fun _ -> blur t; Js._false);
     div##style##position <- Js.string "absolute";
     div##style##height <- px 0;
