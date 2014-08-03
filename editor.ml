@@ -118,7 +118,7 @@ module View = struct
     let content = t.container_txt in
     let cursor = Zed_view.cursor t.view in
     let cur = Zed_cursor.get_line cursor in
-    content##innerHTML <- Js.string "";
+    let frag = Dom_html.window##document##createDocumentFragment () in
     (* let s_div = Dom_html.(createDiv document) in *)
     (* s_div##style##height <- px (start * 18); *)
     (* let e_div = Dom_html.(createDiv document) in *)
@@ -152,14 +152,15 @@ module View = struct
            let d = Dom_html.(createPre document) in
            Dom.appendChild div d);
         incr start;
-        Dom.appendChild content div
+        Dom.appendChild frag div
       ) lines;
     (* Dom.appendChild content e_div *)
     let curpos = Dom_html.(createDiv document) in
     t.set_cursor_xy (xy_of_pos t (Zed_cursor.get_line cursor) (Zed_cursor.get_column cursor));
     curpos##innerHTML <- Js.string (Printf.sprintf "%d-%d" (Zed_cursor.get_line cursor + 1) (Zed_cursor.get_column cursor));
-    Dom.appendChild content curpos;
-
+    Dom.appendChild frag curpos;
+    content##innerHTML <- Js.string "";
+    Dom.appendChild content frag;
     ()
   let display t =
     Dom_html._requestAnimationFrame (Js.wrap_callback (fun _ -> display' t))

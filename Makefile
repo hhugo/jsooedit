@@ -7,3 +7,6 @@ all: editor.ml
 		-pkgs deriving.syntax.std,js_of_ocaml.deriving.syntax,js_of_ocaml.deriving \
 		-syntax camlp4o
 	js_of_ocaml +weak.js editor.byte
+
+clean:
+	ocamlbuild -clean
