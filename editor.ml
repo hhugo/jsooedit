@@ -4,42 +4,6 @@ let (>>=) = Lwt.bind
 let px s = Js.string (string_of_int s ^ "px")
 let em s = Js.string (string_of_int s ^ "em")
 let percent s = Js.string (string_of_int s ^ "%")
-let key_of_code = function
-  | 3 -> `Enter
-  | 8 -> `Backspace
-  | 9 -> `Tab
-  | 13 -> `Enter
-  | 16 -> `Shift
-  | 17 -> `Ctrl
-  | 18 -> `Alt
-  | 19 -> `Pause
-  | 20 -> `CapsLock
-  | 27 -> `Esc
-  | 32 -> `Space
-  | 33 -> `PageUp
-  | 34 -> `PageDown
-  | 35 -> `End
-  | 36 -> `Home
-  | 37 -> `Left
-  | 38 -> `Up
-  | 39 -> `Right
-  | 40 -> `Down
-  | 44 -> `PrintScrn
-  | 45 -> `Insert
-  | 46 -> `Delete
-  | 127 -> `Delete
-  | 63232 -> `Up
-  | 63233 -> `Down
-  | 63234 -> `Left
-  | 63235 -> `Right
-  | 63272 -> `Delete
-  | 63273 -> `Home
-  | 63275 -> `End
-  | 63276 -> `PageUp
-  | 63277 -> `PageDown
-  | 63302 -> `Insert
-  | n -> `Other n
-
 (* Render the editor *)
 module View = struct
 
@@ -300,25 +264,86 @@ module Input = struct
         end in
     loop' first ()
 
+  module Bindings = Zed_input.Make (Key)
+
+  let bindings = ref Bindings.empty
+
+  let bind seq actions = bindings := Bindings.add seq actions !bindings
+  let unbind seq = bindings := Bindings.remove seq !bindings
+
+  module UChar = struct
+    let of_char c =
+      let s = Js.string (String.make 1 c) in
+      int_of_float (s##toUpperCase()##charCodeAt(0))
+  end
+
+  let () =
+    bind [{Key.control = false; meta = false; shift = false; code = Key.Left }] [Zed_edit.Prev_char];
+    bind [{Key.control = false; meta = false; shift = false; code = Key.Right }] [Zed_edit.Next_char];
+    bind [{Key.control = false; meta = false; shift = false; code = Key.Up }] [Zed_edit.Prev_line];
+    bind [{Key.control = false; meta = false; shift = false; code = Key.Down }] [Zed_edit.Next_line];
+    bind [{Key.control = false; meta = false; shift = false; code = Key.Home }] [Zed_edit.Goto_bol];
+    bind [{Key.control = false; meta = false; shift = false; code = Key.End }] [Zed_edit.Goto_eol];
+    bind [{Key.control = false; meta = false; shift = false; code = Key.Insert }] [Zed_edit.Switch_erase_mode];
+    bind [{Key.control = false; meta = false; shift = false; code = Key.Delete }] [Zed_edit.Delete_next_char];
+    bind [{Key.control = false; meta = false; shift = false; code = Key.Enter }] [Zed_edit.Newline];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char ' ') }] [Zed_edit.Set_mark];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char 'a') }] [Zed_edit.Goto_bol];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char 'e') }] [Zed_edit.Goto_eol];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char 'd') }] [Zed_edit.Delete_next_char];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char 'h') }] [Zed_edit.Delete_prev_char];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char 'k') }] [Zed_edit.Kill_next_line];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char 'u') }] [Zed_edit.Kill_prev_line];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char 'n') }] [Zed_edit.Next_char];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char 'p') }] [Zed_edit.Prev_char];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char 'w') }] [Zed_edit.Kill];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char 'y') }] [Zed_edit.Yank];
+    bind [{Key.control = false; meta = false; shift = false; code = Key.Backspace }] [Zed_edit.Delete_prev_char];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Char(UChar.of_char 'w') }] [Zed_edit.Copy];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Char(UChar.of_char 'c') }] [Zed_edit.Capitalize_word];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Char(UChar.of_char 'l') }] [Zed_edit.Lowercase_word];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Char(UChar.of_char 'u') }] [Zed_edit.Uppercase_word];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Char(UChar.of_char 'b') }] [Zed_edit.Prev_word];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Char(UChar.of_char 'f') }] [Zed_edit.Next_word];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Right }] [Zed_edit.Next_word];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Left }] [Zed_edit.Prev_word];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Right }] [Zed_edit.Next_word];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Left }] [Zed_edit.Prev_word];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Backspace }] [Zed_edit.Kill_prev_word];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Delete }] [Zed_edit.Kill_prev_word];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Delete }] [Zed_edit.Kill_next_word];
+    bind [{Key.control = false; meta = true; shift = false; code = Key.Char(UChar.of_char 'd') }] [Zed_edit.Kill_next_word];
+    bind [{Key.control = true; meta = false; shift = false; code = Key.Char(UChar.of_char '_') }] [Zed_edit.Undo]
 
   exception Other_key
   let init input =
+    let resolver = ref None in
     let i = input.input in
     let context = input.context in
-    i##onkeydown <- Dom_html.handler (fun e ->
-        try begin
-          match key_of_code e##keyCode with
-          | `Backspace -> reset input; Zed_edit.delete_prev_char context
-          | `Delete -> reset input; Zed_edit.delete_next_char context
-          | `Enter -> reset input; Zed_edit.insert context (Zed_rope.of_string "\n")
-          | `Left -> reset input; Zed_edit.prev_char context
-          | `Right -> reset input; Zed_edit.next_char context
-          | `Up -> reset input; Zed_edit.prev_line context
-          | `Down -> reset input; Zed_edit.next_line context
-          | _ -> raise Other_key
-        end;
+    i##onkeydown <- Dom_html.handler (fun ( e : Dom_html.keyboardEvent Js.t) ->
+        let res = match !resolver with Some res -> res | None -> Bindings.resolver [Bindings.pack (fun x -> x) !bindings] in
+        let key = {Key.control = Js.to_bool e##ctrlKey;
+                   meta = Js.to_bool e##metaKey;
+                   shift = Js.to_bool e##shiftKey;
+                   code = Key.of_code (e##keyCode) } in
+        let () = Format.eprintf "ctrl:%b  meta:%b  shift:%b code:%d char:%d@."
+            key.control
+            key.meta
+            key.shift
+            (e##keyCode)
+            (Js.Optdef.get (e##charCode) (fun () -> -1)) in
+        match Bindings.resolve key res with
+        | Bindings.Accepted actions ->
+          resolver := None;
+          reset input;
+          List.iter (fun action -> Zed_edit.get_action action context) actions;
           Js._false
-        with Other_key -> Js._true
+        | Bindings.Continue res ->
+          resolver := Some res;
+          Js._false
+        | Bindings.Rejected ->
+          resolver := None;
+          Js._true
       );
     View.set_input input.view i;
     Lwt.ignore_result (listen_loop ~first:true input);
